@@ -1,0 +1,42 @@
+{
+  "name": "@deftwriting/seo-agent",
+  "version": "0.1.0",
+  "description": "Open-source SEO and GEO article agent powered by Deft",
+  "type": "module",
+  "bin": {
+    "seo-agent": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup src/cli.ts --format esm --platform node --target node20 --clean --dts",
+    "dev": "tsx src/cli.ts",
+    "serve": "tsx src/cli.ts serve",
+    "test": "node --import tsx --test src/adapters/*.test.ts src/core/steps/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "seo",
+    "geo",
+    "aeo",
+    "writing",
+    "agent",
+    "deft"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
+}
