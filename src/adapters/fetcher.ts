@@ -1,5 +1,7 @@
-import { isIP } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
 import { resolve4, resolve6 } from "node:dns/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import type { SitePage } from "../types.js";
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
@@ -20,6 +22,12 @@ export interface SafeFetchResult {
   ok: boolean;
   headers: Headers;
   text: string;
+}
+
+interface PublicTarget {
+  url: URL;
+  address: string;
+  family: 4 | 6;
 }
 
 function parseIpv4(address: string): number[] | null {
@@ -101,7 +109,7 @@ export function isPublicIpAddress(address: string): boolean {
   return false;
 }
 
-export async function assertPublicUrl(input: string | URL): Promise<URL> {
+async function resolvePublicTarget(input: string | URL): Promise<PublicTarget> {
   const url = input instanceof URL ? new URL(input) : new URL(input);
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     throw new Error("Only HTTP and HTTPS URLs are allowed.");
@@ -118,7 +126,7 @@ export async function assertPublicUrl(input: string | URL): Promise<URL> {
   const literalFamily = isIP(hostname);
   if (literalFamily) {
     if (!isPublicIpAddress(hostname)) throw new Error("Private or reserved IP addresses are not allowed.");
-    return url;
+    return { url, address: hostname, family: literalFamily as 4 | 6 };
   }
 
   const [v4, v6] = await Promise.all([
@@ -130,68 +138,99 @@ export async function assertPublicUrl(input: string | URL): Promise<URL> {
   if (addresses.some((address) => !isPublicIpAddress(address))) {
     throw new Error(`Host ${hostname} resolves to a private or reserved address.`);
   }
-  return url;
+  const address = addresses[0];
+  if (!address) throw new Error(`Could not resolve ${hostname}.`);
+  return { url, address, family: isIP(address) as 4 | 6 };
 }
 
-async function readLimitedBody(response: Response, maxBytes: number): Promise<string> {
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      throw new Error(`Response exceeded the ${maxBytes}-byte safety limit.`);
-    }
-    chunks.push(value);
-  }
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(merged);
+export async function assertPublicUrl(input: string | URL): Promise<URL> {
+  return (await resolvePublicTarget(input)).url;
+}
+
+export async function resolvePublicRedirect(current: URL, location: string): Promise<URL> {
+  return (await resolvePublicTarget(new URL(location, current))).url;
+}
+
+async function requestPinned(
+  target: PublicTarget,
+  options: SafeFetchOptions,
+  signal: AbortSignal,
+): Promise<SafeFetchResult> {
+  const requester = target.url.protocol === "https:" ? httpsRequest : httpRequest;
+  const pinnedLookup: LookupFunction = (_hostname, lookupOptions, callback) => {
+    if (lookupOptions.all) callback(null, [{ address: target.address, family: target.family }]);
+    else callback(null, target.address, target.family);
+  };
+  return new Promise((resolve, reject) => {
+    const request = requester(target.url, {
+      method: options.method ?? "GET",
+      headers: {
+        "User-Agent": "DeftSEOAgent/1.0 (+https://deftwriting.com/seo-agent)",
+        Accept: "text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.1",
+        ...options.headers,
+      },
+      signal,
+      lookup: pinnedLookup,
+    }, (response) => {
+      const status = response.statusCode ?? 0;
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(response.headers)) {
+        if (Array.isArray(value)) for (const item of value) headers.append(name, item);
+        else if (value !== undefined) headers.set(name, String(value));
+      }
+      if (options.method === "HEAD") {
+        response.resume();
+        resolve({ url: target.url.toString(), status, ok: status >= 200 && status < 300, headers, text: "" });
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      let total = 0;
+      const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+      response.on("data", (chunk: Buffer) => {
+        total += chunk.byteLength;
+        if (total > maxBytes) {
+          response.destroy(new Error(`Response exceeded the ${maxBytes}-byte safety limit.`));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => {
+        resolve({
+          url: target.url.toString(),
+          status,
+          ok: status >= 200 && status < 300,
+          headers,
+          text: Buffer.concat(chunks).toString("utf8"),
+        });
+      });
+      response.on("error", reject);
+    });
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 export async function safeFetch(
   input: string | URL,
   options: SafeFetchOptions = {},
 ): Promise<SafeFetchResult> {
-  let current = await assertPublicUrl(input);
+  let current = input instanceof URL ? new URL(input) : new URL(input);
   const redirects = options.maxRedirects ?? 3;
   for (let hop = 0; hop <= redirects; hop += 1) {
+    const target = await resolvePublicTarget(current);
     const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-    const response = await fetch(current, {
-      method: options.method ?? "GET",
-      redirect: "manual",
-      headers: {
-        "User-Agent": "DeftSEOAgent/1.0 (+https://deftwriting.com/seo-agent)",
-        Accept: "text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.1",
-        ...options.headers,
-      },
-      ...(signal ? { signal } : {}),
-    });
+    const response = await requestPinned(target, options, signal);
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       if (hop === redirects) throw new Error("Too many redirects.");
       const location = response.headers.get("location");
       if (!location) throw new Error("Redirect response omitted its destination.");
-      current = await assertPublicUrl(new URL(location, current));
+      current = await resolvePublicRedirect(current, location);
       continue;
     }
     return {
-      url: current.toString(),
-      status: response.status,
-      ok: response.ok,
-      headers: response.headers,
-      text:
-        options.method === "HEAD"
-          ? ""
-          : await readLimitedBody(response, options.maxBytes ?? DEFAULT_MAX_BYTES),
+      ...response,
     };
   }
   throw new Error("Redirect handling failed.");

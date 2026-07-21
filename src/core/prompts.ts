@@ -24,6 +24,7 @@ Every outline must contain paragraph blocks in exactly this form:
  - Supporting detail grounded in the brief
 
 Start each main bullet at column zero. Prefix detail bullets with exactly one space.
+Any section facts must be copied exactly, field for field, from the supplied research brief.
 Do not write article prose.`;
 
 export const STRUCTURAL_SYSTEM_PROMPT = `You are a structural editor who cannot write prose.
@@ -53,10 +54,11 @@ export function buildSectionDraftPrompt(input: {
   outline: string;
   facts: Array<{ claim: string; source: string; url: string }>;
   site: { product: string; audience: string; positioning: string };
+  includeArticleTitle: boolean;
 }): string {
   return `Write a complete, self-contained article section for the document below. This request is
-for the full section, not a fragment or continuation. Return only the finished section body in
-Markdown; do not repeat the section heading.
+for the full section, not a fragment or continuation. You own the finished prose, including its
+heading. Return Markdown beginning with ${input.includeArticleTitle ? "a single # article title followed by a single ## section heading" : "a single ## section heading"}, then the finished section body. Do not include any other H1 or H2 headings.
 
 Article title: ${input.planTitle}
 Target topic: ${input.topic}

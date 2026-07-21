@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertPublicUrl, isPublicIpAddress, safeFetch } from "./fetcher.js";
+import { assertPublicUrl, isPublicIpAddress, resolvePublicRedirect } from "./fetcher.js";
 
 test("rejects private, loopback, link-local, and reserved IP addresses", () => {
   for (const address of [
@@ -31,17 +31,13 @@ test("URL validation rejects unsafe protocols, credentials, ports, and IP litera
   assert.equal((await assertPublicUrl("https://1.1.1.1/path")).hostname, "1.1.1.1");
 });
 
-test("safe fetch revalidates every redirect before following it", async () => {
-  const originalFetch = globalThis.fetch;
-  let requests = 0;
-  globalThis.fetch = (async () => {
-    requests += 1;
-    return new Response(null, { status: 302, headers: { location: "http://127.0.0.1/private" } });
-  }) as typeof fetch;
-  try {
-    await assert.rejects(() => safeFetch("https://1.1.1.1"), /Private or reserved/);
-    assert.equal(requests, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+test("redirect targets are revalidated before following them", async () => {
+  await assert.rejects(
+    () => resolvePublicRedirect(new URL("https://1.1.1.1"), "http://127.0.0.1/private"),
+    /Private or reserved/,
+  );
+  assert.equal(
+    (await resolvePublicRedirect(new URL("https://1.1.1.1/base"), "/next")).toString(),
+    "https://1.1.1.1/next",
+  );
 });

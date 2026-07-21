@@ -75,6 +75,7 @@ Optional environment variables:
 - `DEFT_API_BASE_URL` — override `https://deftwriting.com` for local or beta testing
 - `SEO_AGENT_OPENROUTER_MODEL` — override the default OpenRouter model
 - `SEO_AGENT_PORT` — default local UI port
+- `SEO_AGENT_MAX_CONCURRENT_RUNS` — simultaneous local UI runs (default: `1`)
 
 ## Cost and network access
 

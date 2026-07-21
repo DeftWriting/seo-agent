@@ -62,6 +62,7 @@ export async function runSeoAgent(
   if (!topic) throw new Error("Topic must not be empty.");
   const openRouterApiKey = requiredKey(options.openRouterApiKey, "OPENROUTER_API_KEY");
   const deftApiKey = requiredKey(options.deftApiKey, "DEFT_API_KEY");
+  const sharedOpenRouterModel = process.env.SEO_AGENT_OPENROUTER_MODEL?.trim() || undefined;
   let usage = { ...EMPTY_USAGE };
 
   await emit(event({ type: "run_started", url: websiteUrl, topic }));
@@ -74,8 +75,8 @@ export async function runSeoAgent(
       url: websiteUrl,
       topic,
       apiKey: openRouterApiKey,
-      model: options.researchModel ?? "google/gemini-3-flash-preview",
-      maxPages: Math.max(1, Math.min(options.maxPages ?? 8, 25)),
+      model: options.researchModel ?? sharedOpenRouterModel ?? "google/gemini-3-flash-preview",
+      maxPages: Math.max(1, Math.min(options.maxPages ?? 12, 25)),
       ...(options.openRouterBaseUrl ? { baseUrl: options.openRouterBaseUrl } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
       onProgress: (message) =>
@@ -91,7 +92,7 @@ export async function runSeoAgent(
       url: websiteUrl,
       research: research.brief,
       apiKey: openRouterApiKey,
-      model: options.planModel ?? "deepseek/deepseek-v4-pro",
+      model: options.planModel ?? sharedOpenRouterModel ?? "deepseek/deepseek-v4-pro",
       ...(options.openRouterBaseUrl ? { baseUrl: options.openRouterBaseUrl } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     });
@@ -111,7 +112,7 @@ export async function runSeoAgent(
       research: research.brief,
       plan: planned.plan,
       apiKey: deftApiKey,
-      concurrency: Math.max(1, Math.min(options.sectionConcurrency ?? 7, 12)),
+      concurrency: Math.max(1, Math.min(options.sectionConcurrency ?? 4, 12)),
       thinkingLevel: options.thinkingLevel ?? "smarter",
       ...(options.deftApiUrl ? { endpoint: options.deftApiUrl } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
@@ -141,11 +142,16 @@ export async function runSeoAgent(
 
     activeStep = "structural";
     await emit(event({ type: "step_started", step: activeStep, message: "Cutting and arranging the draft" }));
+    const draftedPlan = {
+      ...planned.plan,
+      title: drafted.title,
+      sections: drafted.sections.map(({ text: _text, ...section }) => section),
+    };
     const structural = await structuralStep({
-      plan: planned.plan,
+      plan: draftedPlan,
       sections: drafted.sections,
       apiKey: openRouterApiKey,
-      model: options.editModel ?? "google/gemini-3-flash-preview",
+      model: options.editModel ?? sharedOpenRouterModel ?? "google/gemini-3-flash-preview",
       ...(options.openRouterBaseUrl ? { baseUrl: options.openRouterBaseUrl } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     });
@@ -161,7 +167,7 @@ export async function runSeoAgent(
       markdown: structural.result.markdown,
       research: research.brief,
       apiKey: openRouterApiKey,
-      model: options.reviewModel ?? "openai/gpt-5.4-mini",
+      model: options.reviewModel ?? sharedOpenRouterModel ?? "openai/gpt-5.4-mini",
       ...(options.openRouterBaseUrl ? { baseUrl: options.openRouterBaseUrl } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
       onProgress: (message) => emit(event({ type: "step_progress", step: "review", message })),
@@ -176,7 +182,7 @@ export async function runSeoAgent(
       url: websiteUrl,
       topic,
       research: research.brief,
-      plan: planned.plan,
+      plan: draftedPlan,
       sections: drafted.sections,
       structural: structural.result,
       review: reviewed.report,

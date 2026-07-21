@@ -7,6 +7,7 @@ import type {
   TokenUsage,
 } from "../../types.js";
 import { STRUCTURAL_SYSTEM_PROMPT } from "../prompts.js";
+import { isFullSentenceMatch } from "./sentence-cuts.js";
 
 export interface StructuralStepOptions {
   plan: ArticlePlan;
@@ -111,6 +112,10 @@ export function applyStructuralOperations(
     const match = matches[0];
     if (!match) continue;
     const [id, text] = match;
+    if (!isFullSentenceMatch(text, sentence)) {
+      rejectedOperations.push(`Sentence cut was not a complete sentence: ${sentence.slice(0, 80)}`);
+      continue;
+    }
     mutable.set(id, text.replace(sentence, "").replace(/ {2,}/g, " ").trim());
   }
 

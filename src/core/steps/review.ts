@@ -9,6 +9,7 @@ import type {
   TokenUsage,
 } from "../../types.js";
 import { REVIEW_SYSTEM_PROMPT } from "../prompts.js";
+import { isFullSentenceMatch } from "./sentence-cuts.js";
 
 export interface ReviewStepOptions {
   markdown: string;
@@ -112,6 +113,10 @@ export function applyReviewProposal(
   for (const sentence of [...new Set(proposal.cutSentences)]) {
     if (countExact(markdown, sentence) !== 1) {
       rejectedChanges.push({ change: sentence, reason: "Cut text did not match exactly once." });
+      continue;
+    }
+    if (!isFullSentenceMatch(markdown, sentence)) {
+      rejectedChanges.push({ change: sentence, reason: "Cut text was not a complete sentence." });
       continue;
     }
     markdown = markdown.replace(sentence, "").replace(/ {2,}/g, " ");
