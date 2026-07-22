@@ -1,5 +1,6 @@
 import { createServer, type ServerResponse } from "node:http";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { emptyCostSummary } from "./adapters/cost-meter.js";
 import { runSeoAgent } from "./core/run.js";
 import type { SeoAgentEvent } from "./types.js";
 import { UI_HTML } from "./ui.js";
@@ -147,6 +148,10 @@ export async function serveSeoAgent(options: { port?: number } = {}): Promise<vo
             emit({
               type: "run_failed",
               error: error instanceof Error ? error.message : String(error),
+              // This fallback fires only if runSeoAgent itself threw before emitting its own
+              // run_failed event (which normally carries the real partial cost) — so there is no
+              // meter left to read from here.
+              partialCost: emptyCostSummary(),
               at: new Date().toISOString(),
             });
           }

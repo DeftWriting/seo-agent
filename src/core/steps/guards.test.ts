@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ArticlePlan, DraftedSection, ReviewProposal } from "../../types.js";
+import type { ArticlePlan, DraftedSection } from "../../types.js";
 import { isCollapsedSection, parseDraftedSection } from "./draft.js";
 import { parsePlan, renderParagraphOutline } from "./plan.js";
-import { addedWordCount, applyReviewProposal, withSourcesSection } from "./review.js";
 import { applyStructuralOperations, withoutTrailingFragment } from "./structural.js";
 
 test("renderParagraphOutline renders structured paragraphs into the writer-facing bullet format", () => {
@@ -78,83 +77,6 @@ test("planner can assign only facts from the approved research ledger", () => {
       ),
     /not in the research ledger/,
   );
-});
-
-test("review guards reject non-unique and expansive rewrites", () => {
-  const proposal: ReviewProposal = {
-    edits: [
-      { find: "same", replace: "better", type: "clarity", reason: "ambiguous" },
-      {
-        find: "A short claim.",
-        replace: "A radically improved and thoroughly expanded marketing claim.",
-        type: "clarity",
-        reason: "too much prose",
-      },
-      { find: "One typoo.", replace: "One typo.", type: "grammar", reason: "typo" },
-    ],
-    cutSentences: ["Remove this sentence."],
-    issues: [],
-  };
-  const result = applyReviewProposal(
-    "same same\n\nA short claim. One typoo. Remove this sentence.",
-    proposal,
-  );
-  assert.match(result.markdown, /One typo\./);
-  assert.doesNotMatch(result.markdown, /Remove this sentence/);
-  assert.equal(result.report.appliedEdits.length, 1);
-  assert.equal(result.report.rejectedChanges.length, 2);
-  assert.equal(addedWordCount("The accurate result", "The more accurate result"), 1);
-});
-
-test("review guards accept a citation edit that only wraps existing words in a Markdown link", () => {
-  const proposal: ReviewProposal = {
-    edits: [{ find: "NCIS (https://example.com/report)", replace: "[NCIS](https://example.com/report)", type: "citation", reason: "add citation" }],
-    cutSentences: [],
-    issues: [],
-  };
-  const result = applyReviewProposal("NCIS (https://example.com/report) reported the figure.", proposal);
-  assert.match(result.markdown, /\[NCIS\]\(https:\/\/example\.com\/report\)/);
-  assert.equal(result.report.rejectedChanges.length, 0);
-});
-
-test("review guards refuse a sentence cut that would leave its section almost empty", () => {
-  const sentence = "This extra padding sentence keeps the section long enough to begin with.";
-  const markdown = `## Only Section\n\n${sentence} Short filler.`;
-  const result = applyReviewProposal(markdown, { edits: [], cutSentences: [sentence], issues: [] });
-  assert.match(result.markdown, /keeps the section long enough/);
-  assert.equal(result.report.rejectedChanges[0]?.reason, "Cutting this sentence would leave its section with almost no body text.");
-});
-
-test("sentence cuts reject arbitrary substrings that could change meaning", () => {
-  const result = applyReviewProposal("The result is not accurate. Keep this sentence.", {
-    edits: [],
-    cutSentences: ["not ", "Keep this sentence."],
-    issues: [],
-  });
-  assert.match(result.markdown, /not accurate/);
-  assert.doesNotMatch(result.markdown, /Keep this sentence/);
-  assert.equal(result.report.appliedCuts.length, 1);
-  assert.equal(result.report.rejectedChanges[0]?.reason, "Cut text was not a complete sentence.");
-});
-
-test("withSourcesSection lists every linked URL with a research-derived label, once", () => {
-  const research = {
-    site: { product: "", audience: "", positioning: "", voice: "", existingPages: [] },
-    serp: { competitors: [], gaps: [], questions: [] },
-    facts: [{ claim: "A stat", source: "Example Org", url: "https://example.com/report" }],
-  };
-  const markdown = "## Section\n\nAs [Example Org](https://example.com/report) found, this matters.";
-  const withSources = withSourcesSection(markdown, research);
-  assert.match(withSources, /## Sources/);
-  assert.match(withSources, /- \[Example Org\]\(https:\/\/example\.com\/report\)/);
-  // Idempotent: running it again over an article that already has a Sources section is a no-op.
-  assert.equal(withSourcesSection(withSources, research), withSources);
-});
-
-test("withSourcesSection is a no-op when nothing in the body is linked", () => {
-  const research = { site: { product: "", audience: "", positioning: "", voice: "", existingPages: [] }, serp: { competitors: [], gaps: [], questions: [] }, facts: [] };
-  const markdown = "## Section\n\nNo links here.";
-  assert.equal(withSourcesSection(markdown, research), markdown);
 });
 
 test("Deft owns the final article and section headings", () => {

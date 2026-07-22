@@ -204,6 +204,7 @@ export async function structuralStep(
     baseUrl: options.baseUrl,
     signal: options.signal,
     temperature: 0,
+    costLabel: "structural_edit",
     messages: [
       { role: "system", content: STRUCTURAL_SYSTEM_PROMPT },
       {

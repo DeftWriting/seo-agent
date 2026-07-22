@@ -19,10 +19,12 @@ export type LlmFailureReason =
   | "connection"
   | "invalid_output"
   | "unsupported_request"
+  | "context_length"
   | "auth"
   | "unknown";
 
 const CONNECTION_PATTERNS = /terminated|socket|econnreset|econnrefused|network|fetch failed|premature close/i;
+const CONTEXT_LENGTH_PATTERNS = /context|too long|maximum.*token|token.*limit/i;
 
 export function classifyLlmFailure(error: unknown): { reason: LlmFailureReason; action: LlmFailureAction } {
   if (error instanceof DOMException && error.name === "TimeoutError") return { reason: "timeout", action: "use_fallback" };
@@ -35,7 +37,12 @@ export function classifyLlmFailure(error: unknown): { reason: LlmFailureReason; 
     if (status === 401 || status === 403) return { reason: "auth", action: "fail_fast" };
     if (status === 429) return { reason: "rate_limited", action: "retry_same" };
     if (status >= 500) return { reason: "upstream_error", action: "retry_same" };
-    if (status === 400 || status === 404 || status === 422) return { reason: "unsupported_request", action: "use_fallback" };
+    if (status === 400 || status === 404 || status === 422) {
+      // A 400 mentioning length is about this payload against this model's context window, not a
+      // schema rejection — a different model may fit it, but the same model will not on a second try.
+      if (CONTEXT_LENGTH_PATTERNS.test(error.message)) return { reason: "context_length", action: "use_fallback" };
+      return { reason: "unsupported_request", action: "use_fallback" };
+    }
     // A healthy HTTP call that returned an empty or unparseable body is worth one more roll of the dice.
     return { reason: "invalid_output", action: "retry_same" };
   }

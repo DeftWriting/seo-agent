@@ -1,4 +1,5 @@
 import type { TokenUsage } from "../types.js";
+import { recordLlmCost, recordLlmFailure, recordLlmFallback } from "./cost-meter.js";
 import { classifyLlmFailure } from "./llm-failures.js";
 
 export class OpenRouterError extends Error {
@@ -37,6 +38,10 @@ export interface CompleteJsonOptions {
   baseUrl?: string | undefined;
   signal?: AbortSignal | undefined;
   timeoutMs?: number | undefined;
+  // A short, stable name for this call's purpose (e.g. "fact_checker", "line_edit", "final_edit"),
+  // reported into the active cost meter alongside the pipeline step it ran under. Defaults to "openrouter"
+  // when omitted; purely descriptive, never sent to the model.
+  costLabel?: string | undefined;
 }
 
 export interface LlmJsonResult {
@@ -51,7 +56,10 @@ interface OpenRouterResponse {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
+    cost?: number;
+    server_tool_use_details?: { web_search_requests?: number };
   };
+  model?: string;
   error?: { message?: string };
 }
 
@@ -116,6 +124,9 @@ async function requestOnce(options: RequestOptions): Promise<LlmJsonResult> {
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
       ...(options.usePlugins && options.plugins?.length ? { plugins: options.plugins } : {}),
       response_format: { type: "json_object" },
+      // A CLI user pays for their own key directly, so cost is measured on every call, always — unlike
+      // the hosted product, where this is opt-in per metered scope (see adapters/cost-meter.ts).
+      usage: { include: true },
     }),
     signal,
   });
@@ -129,6 +140,15 @@ async function requestOnce(options: RequestOptions): Promise<LlmJsonResult> {
   if (!raw) throw new Error("OpenRouter returned an empty response.");
   const promptTokens = body?.usage?.prompt_tokens ?? 0;
   const completionTokens = body?.usage?.completion_tokens ?? 0;
+
+  recordLlmCost({
+    label: options.costLabel ?? "openrouter",
+    model: body?.model ?? options.model,
+    costUsd: typeof body?.usage?.cost === "number" ? body.usage.cost : null,
+    webSearchRequests: body?.usage?.server_tool_use_details?.web_search_requests ?? 0,
+    inputTokens: promptTokens,
+    outputTokens: completionTokens,
+  });
 
   return {
     value: parseJsonResponse(raw),
@@ -155,11 +175,15 @@ export async function completeJson(options: CompleteJsonOptions): Promise<LlmJso
 
   for (const [index, model] of candidates.entries()) {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const started = Date.now();
       try {
-        return await requestOnce({ ...options, model, usePlugins: index === 0 });
+        const result = await requestOnce({ ...options, model, usePlugins: index === 0 });
+        if (index > 0) recordLlmFallback();
+        return result;
       } catch (error) {
         firstError ??= error;
-        const { action } = classifyLlmFailure(error);
+        const { reason, action } = classifyLlmFailure(error);
+        recordLlmFailure({ model, reason, ms: Date.now() - started, attempt });
         if (action === "fail_fast") throw error;
         if (action === "retry_same" && attempt === 1) {
           await delay(RETRY_BACKOFF_MS);

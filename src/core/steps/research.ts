@@ -67,6 +67,7 @@ function parseResearchBrief(value: unknown): ResearchBrief {
 
   return {
     site: {
+      name: stringValue(site.name) || undefined,
       product: stringValue(site.product, "Unknown product"),
       audience: stringValue(site.audience, "General audience"),
       positioning: stringValue(site.positioning, "Not established"),
@@ -110,6 +111,7 @@ export async function researchStep(options: ResearchStepOptions): Promise<Resear
       fallbackModel: options.fallbackModel,
       baseUrl: options.baseUrl,
       signal: options.signal,
+      costLabel: "search_landscape",
       plugins: [{ id: "web", engine: "exa", max_results: 10 }],
       messages: [
         { role: "system", content: RESEARCH_SEARCH_SYSTEM_PROMPT },
@@ -125,6 +127,7 @@ export async function researchStep(options: ResearchStepOptions): Promise<Resear
       fallbackModel: options.fallbackModel,
       baseUrl: options.baseUrl,
       signal: options.signal,
+      costLabel: "search_questions",
       plugins: [{ id: "web", engine: "exa", max_results: 10 }],
       messages: [
         { role: "system", content: RESEARCH_SEARCH_SYSTEM_PROMPT },
@@ -144,6 +147,7 @@ export async function researchStep(options: ResearchStepOptions): Promise<Resear
     baseUrl: options.baseUrl,
     signal: options.signal,
     temperature: 0,
+    costLabel: "synthesis",
     messages: [
       { role: "system", content: RESEARCH_SYNTHESIS_SYSTEM_PROMPT },
       {

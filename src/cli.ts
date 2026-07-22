@@ -15,16 +15,23 @@ Usage:
   seo-agent serve [--port <n>]
 
 Options:
-  --url <url>           Public website to research
-  --topic <text>        Target topic or keyword
-  --out <path>          Markdown output path
-  --max-pages <n>       Maximum site pages to inspect (default: 12)
-  --concurrency <n>     Parallel Deft drafts (default: 4)
-  --thinking <level>    faster or smarter (default: faster)
-  --json                Emit NDJSON progress to stdout
-  --port <n>            Local UI port (default: 4173)
-  --help                Show help
-  --version             Show version
+  --url <url>              Public website to research
+  --topic <text>           Target topic or keyword
+  --out <path>             Markdown output path
+  --max-pages <n>          Maximum site pages to inspect (default: 12)
+  --concurrency <n>        Parallel Deft drafts and line-edit calls (default: 4)
+  --thinking <level>       faster or smarter (default: faster)
+  --skip-review            Skip the adversarial fact-checker/line-editor/final-edit stage
+                           (cheaper and faster; still lints and repairs the article, and still
+                           adds a Sources/Table of Contents, but ships with no verified citations)
+  --line-edit-max-calls <n>  Cap the line editor's per-paragraph fan-out (default: 8)
+  --json                   Emit NDJSON progress to stdout
+  --port <n>               Local UI port (default: 4173)
+  --help                   Show help
+  --version                Show version
+
+Environment overrides: SEO_AGENT_SKIP_REVIEW=1, SEO_AGENT_LINE_EDIT_MAX_CALLS=<n>. See README.md
+for the full list of environment variables, default models, and what a typical run costs.
 `;
 
 function positiveInteger(value: string | undefined, name: string): number | undefined {
@@ -54,6 +61,8 @@ async function main(): Promise<void> {
       "max-pages": { type: "string" },
       concurrency: { type: "string" },
       thinking: { type: "string" },
+      "skip-review": { type: "boolean", default: false },
+      "line-edit-max-calls": { type: "string" },
       json: { type: "boolean", default: false },
       port: { type: "string" },
       help: { type: "boolean", short: "h", default: false },
@@ -94,6 +103,8 @@ async function main(): Promise<void> {
     maxPages: positiveInteger(values["max-pages"], "--max-pages"),
     sectionConcurrency: positiveInteger(values.concurrency, "--concurrency"),
     thinkingLevel: values.thinking,
+    skipReview: values["skip-review"],
+    lineEditMaxCalls: positiveInteger(values["line-edit-max-calls"], "--line-edit-max-calls"),
   }, (event) => reporter.report(event));
 
   const outputPath = resolve(values.out ?? outputFilename(result.plan.title));

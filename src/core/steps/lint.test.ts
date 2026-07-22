@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyRepairEdits, lintArticle } from "./lint.js";
+import { applyRepairEdits, isRepairableLintFinding, lintArticle } from "./lint.js";
 
 test("lintArticle flags a section that opens by restating its own heading", () => {
   const markdown = "# Title\n\n## Widget Basics\n\nWidget Basics are the foundation of everything else here that matters a great deal.";
@@ -49,6 +49,49 @@ test("lintArticle flags a paragraph that stops mid-sentence", () => {
   const markdown = "# Title\n\n## Section\n\nThis paragraph reads fine up until it just stops without";
   const findings = lintArticle(markdown);
   assert.ok(findings.some((finding) => finding.rule === "unterminated_paragraph"));
+});
+
+test("lintArticle flags a colon-terminated kicker glued onto a paragraph's real first sentence", () => {
+  const markdown = "# Title\n\n## Section\n\nThe Modern Guide to Widgets: There is a growing community of builders who rely on well-made widgets every day.";
+  const findings = lintArticle(markdown);
+  const finding = findings.find((item) => item.rule === "paragraph_opens_with_heading");
+  assert.ok(finding);
+  // The fragment stops at the colon, so a verbatim deletion never eats into the real sentence.
+  assert.equal(finding?.quote, "The Modern Guide to Widgets:");
+});
+
+test("lintArticle flags a long bare title-cased run with no colon", () => {
+  const markdown = "# Title\n\n## Section\n\nThe Modern Independent Guide To Everyday Widgets There is a growing community of builders relying on them daily.";
+  const findings = lintArticle(markdown);
+  assert.ok(findings.some((finding) => finding.rule === "paragraph_opens_with_heading"));
+});
+
+test("lintArticle does not flag an ordinary institutional-subject sentence", () => {
+  const markdown = "# Title\n\n## Section\n\nThe United Nations Security Council convened an emergency session to discuss the growing crisis in the region.";
+  const findings = lintArticle(markdown);
+  assert.ok(!findings.some((finding) => finding.rule === "paragraph_opens_with_heading"));
+});
+
+test("lintArticle exempts a paragraph that opens with a deliberate citation link", () => {
+  const markdown = "# Title\n\n## Section\n\n[NCIS National Council](https://example.com) reported a large increase in membership across the country this year.";
+  const findings = lintArticle(markdown);
+  assert.ok(!findings.some((finding) => finding.rule === "paragraph_opens_with_heading"));
+});
+
+test("isRepairableLintFinding treats duplicate_heading as unrepairable but the rest as repairable", () => {
+  assert.equal(isRepairableLintFinding({ rule: "duplicate_heading", quote: "", detail: "" }), false);
+  assert.equal(isRepairableLintFinding({ rule: "paragraph_opens_with_heading", quote: "", detail: "" }), true);
+  assert.equal(isRepairableLintFinding({ rule: "unterminated_paragraph", quote: "", detail: "" }), true);
+});
+
+test("applyRepairEdits drops an edit that introduces a URL not already in the article", () => {
+  // Same words in the same order — addedWordCount is 0 because URLs are stripped before tokenizing
+  // (see lint.ts's `words()`) — so only the dedicated new-URL guard can catch the new link here.
+  const result = applyRepairEdits("A sentence with a link at all.", [
+    { rule: "bare_url_in_prose", find: "A sentence with a link at all.", replace: "A sentence with [a link](https://example.com/new) at all." },
+  ]);
+  assert.equal(result.applied.length, 0);
+  assert.match(result.dropped[0] ?? "", /introduces new url/);
 });
 
 test("lintArticle ignores a generated Sources or Table of Contents section", () => {

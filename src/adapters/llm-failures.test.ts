@@ -19,6 +19,17 @@ test("schema/request rejections use a fallback instead of retrying a model that 
   assert.deepEqual(classifyLlmFailure(new OpenRouterError(422, "unprocessable")), { reason: "unsupported_request", action: "use_fallback" });
 });
 
+test("a 400 that names the context window is context_length, not a schema rejection", () => {
+  assert.deepEqual(classifyLlmFailure(new OpenRouterError(400, "This model's maximum context length is 128000 tokens")), {
+    reason: "context_length",
+    action: "use_fallback",
+  });
+  assert.deepEqual(classifyLlmFailure(new OpenRouterError(400, "prompt is too long for this model")), {
+    reason: "context_length",
+    action: "use_fallback",
+  });
+});
+
 test("timeouts use a fallback: a model that did not finish in budget usually will not on a second try", () => {
   const abortError = new DOMException("The operation was aborted.", "TimeoutError");
   assert.deepEqual(classifyLlmFailure(abortError), { reason: "timeout", action: "use_fallback" });

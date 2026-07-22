@@ -1,4 +1,5 @@
 import type { TokenUsage } from "../types.js";
+import { recordDeftCost } from "./cost-meter.js";
 
 export interface GenerateWithDeftOptions {
   apiKey: string;
@@ -68,6 +69,9 @@ export async function generateWithDeft(
   const input = numberOrZero(body.usage?.input_tokens);
   const output = numberOrZero(body.usage?.output_tokens);
   const thinking = numberOrZero(body.usage?.thinking_tokens);
+  const amountCents = numberOrZero(body.usage?.amount_cents) || undefined;
+  // Deft's own billed amount is the CLI's other cost source alongside OpenRouter (see cost-meter.ts).
+  if (amountCents !== undefined) recordDeftCost(amountCents);
   return {
     id: body.id,
     text: body.text.trim(),
@@ -76,6 +80,6 @@ export async function generateWithDeft(
       completionTokens: output + thinking,
       totalTokens: input + output + thinking,
     },
-    amountCents: numberOrZero(body.usage?.amount_cents) || undefined,
+    amountCents,
   };
 }

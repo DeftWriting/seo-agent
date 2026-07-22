@@ -115,6 +115,7 @@ export async function planStep(
     baseUrl: options.baseUrl,
     signal: options.signal,
     temperature: 0.2,
+    costLabel: "plan",
     messages: [
       { role: "system", content: PLAN_SYSTEM_PROMPT },
       {
