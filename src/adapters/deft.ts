@@ -48,7 +48,7 @@ export async function generateWithDeft(
     },
     body: JSON.stringify({
       prompt: options.prompt,
-      thinkingLevel: options.thinkingLevel ?? "smarter",
+      thinkingLevel: options.thinkingLevel ?? "faster",
       detailMode: "strict",
     }),
     ...(options.signal ? { signal: options.signal } : {}),

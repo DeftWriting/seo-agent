@@ -113,7 +113,7 @@ export async function runSeoAgent(
       plan: planned.plan,
       apiKey: deftApiKey,
       concurrency: Math.max(1, Math.min(options.sectionConcurrency ?? 4, 12)),
-      thinkingLevel: options.thinkingLevel ?? "smarter",
+      thinkingLevel: options.thinkingLevel ?? "faster",
       ...(options.deftApiUrl ? { endpoint: options.deftApiUrl } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
       onSectionStart: (index, total, heading) =>

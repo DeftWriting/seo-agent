@@ -63,7 +63,7 @@ seo-agent --url <website> --topic <topic> [options]
 --out <path>        Output Markdown path (default: a title-based filename)
 --max-pages <n>     Maximum site pages to inspect (default: 12)
 --concurrency <n>   Concurrent Deft section drafts (default: 4)
---thinking <level>  Deft thinking level: smarter or faster (default: smarter)
+--thinking <level>  Deft thinking level: faster or smarter (default: faster)
 --json              Emit newline-delimited JSON progress to stdout
 --help              Show help
 

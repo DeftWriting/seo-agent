@@ -20,7 +20,7 @@ Options:
   --out <path>          Markdown output path
   --max-pages <n>       Maximum site pages to inspect (default: 12)
   --concurrency <n>     Parallel Deft drafts (default: 4)
-  --thinking <level>    smarter or faster (default: smarter)
+  --thinking <level>    faster or smarter (default: faster)
   --json                Emit NDJSON progress to stdout
   --port <n>            Local UI port (default: 4173)
   --help                Show help
