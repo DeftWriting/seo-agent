@@ -246,13 +246,25 @@ function decodeEntities(value: string): string {
     .replace(/&#39;|&apos;/gi, "'");
 }
 
+// Page chrome — nav labels, cookie bars, newsletter CTAs, footer link lists — is indistinguishable from
+// prose once the surrounding tags are gone, and a writer downstream will happily open a section with
+// "Join the Newsletter". Strip these elements before flattening so that phrasing never enters the
+// pipeline. Applied to convergence (not just once) because a non-greedy match on nested identical tags
+// otherwise stops at the first closing tag and leaves the outer one as literal text.
+const CHROME_ELEMENTS = /<(script|style|noscript|svg|template|nav|header|footer|aside|form|dialog)\b[^>]*>[\s\S]*?<\/\1>/gi;
+
 export function htmlToText(html: string): { title: string; text: string } {
   const title = decodeEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "")
     .replace(/\s+/g, " ")
     .trim();
+  let stripped = html;
+  for (let pass = 0; pass < 3; pass += 1) {
+    const next = stripped.replace(CHROME_ELEMENTS, " ");
+    if (next === stripped) break;
+    stripped = next;
+  }
   const text = decodeEntities(
-    html
-      .replace(/<(script|style|noscript|svg|template)[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    stripped
       .replace(/<!--([\s\S]*?)-->/g, " ")
       .replace(/<(br|\/p|\/div|\/li|\/h[1-6]|\/section|\/article)>/gi, "\n")
       .replace(/<[^>]+>/g, " "),

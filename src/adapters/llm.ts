@@ -1,4 +1,15 @@
 import type { TokenUsage } from "../types.js";
+import { classifyLlmFailure } from "./llm-failures.js";
+
+export class OpenRouterError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "OpenRouterError";
+    this.status = status;
+  }
+}
 
 export interface LlmPlugin {
   id: "web";
@@ -15,12 +26,17 @@ export interface LlmMessage {
 export interface CompleteJsonOptions {
   apiKey: string;
   model: string;
+  // Cross-provider on purpose: the one schema rejection this pipeline has hit in practice was one
+  // provider refusing a strict JSON schema shape, which a same-provider fallback would fail identically.
+  // A fallback only ever runs when the primary attempt fails, so it costs nothing on the normal path.
+  fallbackModel?: string | undefined;
   messages: LlmMessage[];
   plugins?: LlmPlugin[] | undefined;
   temperature?: number | undefined;
   maxTokens?: number | undefined;
   baseUrl?: string | undefined;
   signal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
 }
 
 export interface LlmJsonResult {
@@ -72,8 +88,19 @@ export function parseJsonResponse(text: string): unknown {
   }
 }
 
-export async function completeJson(options: CompleteJsonOptions): Promise<LlmJsonResult> {
+const DEFAULT_TIMEOUT_MS = 90_000;
+const RETRY_BACKOFF_MS = 750;
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+interface RequestOptions extends CompleteJsonOptions {
+  usePlugins: boolean;
+}
+
+async function requestOnce(options: RequestOptions): Promise<LlmJsonResult> {
   const endpoint = `${(options.baseUrl ?? "https://openrouter.ai/api/v1").replace(/\/$/, "")}/chat/completions`;
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -87,17 +114,15 @@ export async function completeJson(options: CompleteJsonOptions): Promise<LlmJso
       messages: options.messages,
       temperature: options.temperature ?? 0,
       ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
-      ...(options.plugins?.length ? { plugins: options.plugins } : {}),
+      ...(options.usePlugins && options.plugins?.length ? { plugins: options.plugins } : {}),
       response_format: { type: "json_object" },
     }),
-    ...(options.signal ? { signal: options.signal } : {}),
+    signal,
   });
 
   const body = (await response.json().catch(() => null)) as OpenRouterResponse | null;
   if (!response.ok) {
-    throw new Error(
-      `OpenRouter request failed (${response.status}): ${body?.error?.message ?? response.statusText}`,
-    );
+    throw new OpenRouterError(response.status, body?.error?.message ?? response.statusText);
   }
 
   const raw = contentToString(body?.choices?.[0]?.message?.content);
@@ -114,4 +139,35 @@ export async function completeJson(options: CompleteJsonOptions): Promise<LlmJso
       totalTokens: body?.usage?.total_tokens ?? promptTokens + completionTokens,
     },
   };
+}
+
+export async function completeJson(options: CompleteJsonOptions): Promise<LlmJsonResult> {
+  // Each candidate model gets at most two attempts, and only when the first failure was the kind a
+  // second identical request could plausibly survive (see classifyLlmFailure). Plugins (web search) are
+  // only ever sent to the primary model: the one schema failure this pipeline has hit in practice was a
+  // provider rejecting a strict schema alongside server-side tools, so a fallback drops them rather than
+  // risk failing the same way twice.
+  const candidates =
+    options.fallbackModel && options.fallbackModel !== options.model
+      ? [options.model, options.fallbackModel]
+      : [options.model];
+  let firstError: unknown = null;
+
+  for (const [index, model] of candidates.entries()) {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return await requestOnce({ ...options, model, usePlugins: index === 0 });
+      } catch (error) {
+        firstError ??= error;
+        const { action } = classifyLlmFailure(error);
+        if (action === "fail_fast") throw error;
+        if (action === "retry_same" && attempt === 1) {
+          await delay(RETRY_BACKOFF_MS);
+          continue;
+        }
+        break;
+      }
+    }
+  }
+  throw firstError;
 }

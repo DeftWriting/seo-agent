@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertPublicUrl, isPublicIpAddress, resolvePublicRedirect } from "./fetcher.js";
+import { assertPublicUrl, htmlToText, isPublicIpAddress, resolvePublicRedirect } from "./fetcher.js";
 
 test("rejects private, loopback, link-local, and reserved IP addresses", () => {
   for (const address of [
@@ -40,4 +40,21 @@ test("redirect targets are revalidated before following them", async () => {
     (await resolvePublicRedirect(new URL("https://1.1.1.1/base"), "/next")).toString(),
     "https://1.1.1.1/next",
   );
+});
+
+test("htmlToText strips page chrome so nav/footer/CTA phrasing never reaches research", () => {
+  const html = `<html><head><title>Example Co</title></head><body>
+    <nav>Home About Pricing</nav>
+    <header><div>Sign up for our newsletter</div></header>
+    <main><p>Example Co helps teams ship faster.</p></main>
+    <aside>Related posts you might like</aside>
+    <footer>Copyright 2026 Example Co. All rights reserved.</footer>
+  </body></html>`;
+  const { title, text } = htmlToText(html);
+  assert.equal(title, "Example Co");
+  assert.match(text, /helps teams ship faster/);
+  assert.doesNotMatch(text, /newsletter/i);
+  assert.doesNotMatch(text, /Related posts/i);
+  assert.doesNotMatch(text, /Copyright/i);
+  assert.doesNotMatch(text, /Home About Pricing/);
 });

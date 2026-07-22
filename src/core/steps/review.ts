@@ -9,6 +9,7 @@ import type {
   TokenUsage,
 } from "../../types.js";
 import { REVIEW_SYSTEM_PROMPT } from "../prompts.js";
+import { lintAndRepairArticle } from "./lint.js";
 import { isFullSentenceMatch } from "./sentence-cuts.js";
 
 export interface ReviewStepOptions {
@@ -16,6 +17,7 @@ export interface ReviewStepOptions {
   research: ResearchBrief;
   apiKey: string;
   model: string;
+  fallbackModel?: string | undefined;
   baseUrl?: string;
   signal?: AbortSignal;
   onProgress?: (message: string) => void | Promise<void>;
@@ -84,10 +86,29 @@ export function addedWordCount(find: string, replace: string): number {
   return added;
 }
 
+// A shorter article with filler and dangling references removed is usually a better article, so cuts
+// are not capped by count. What a cut may never do is take a "## " section below the point where it
+// stops being a section: this floor plus headroom is that line, applied per section and recomputed
+// against the *current* markdown on every cut so an earlier cut in one section is never charged to
+// the wrong one.
+const MIN_SECTION_WORDS_AFTER_CUTS = 60;
+
+function proseWordCount(text: string): number {
+  return text.replace(/https?:\/\/\S+/g, "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+function sectionWordCounts(markdown: string): Array<{ start: number; words: number }> {
+  const starts = [...markdown.matchAll(/^##\s+.+$/gm)].map((match) => match.index ?? 0);
+  return starts.map((start, index) => ({
+    start,
+    words: proseWordCount(markdown.slice(start, starts[index + 1] ?? markdown.length)),
+  }));
+}
+
 export function applyReviewProposal(
   source: string,
   proposal: ReviewProposal,
-): { markdown: string; report: Omit<ReviewReport, "deadLinks"> } {
+): { markdown: string; report: Omit<ReviewReport, "deadLinks" | "lint"> } {
   let markdown = source;
   const appliedEdits: ReviewEdit[] = [];
   const appliedCuts: string[] = [];
@@ -119,6 +140,15 @@ export function applyReviewProposal(
       rejectedChanges.push({ change: sentence, reason: "Cut text was not a complete sentence." });
       continue;
     }
+    // Recomputed against the current markdown, not the original: earlier cuts already shifted every
+    // offset, so a section map built once would attribute a later cut to the wrong section.
+    const at = markdown.indexOf(sentence);
+    const containingSections = sectionWordCounts(markdown).filter((entry) => entry.start <= at);
+    const section = containingSections[containingSections.length - 1];
+    if (section && section.words - proseWordCount(sentence) < MIN_SECTION_WORDS_AFTER_CUTS) {
+      rejectedChanges.push({ change: sentence, reason: "Cutting this sentence would leave its section with almost no body text." });
+      continue;
+    }
     markdown = markdown.replace(sentence, "").replace(/ {2,}/g, " ");
     appliedCuts.push(sentence);
   }
@@ -148,6 +178,30 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Every external URL the shipped body actually links needs a matching Sources entry — not only the
+// ones the review model happened to discuss, since a bare-URL fix or a citation the writer inserted on
+// its own is still a live citation once it is on the page. Labels reuse whatever the research already
+// knows about that URL (a fact's source name, an existing page's title), falling back to the hostname.
+function sourceLabel(url: string, research: ResearchBrief): string {
+  const fact = research.facts.find((candidate) => candidate.url === url);
+  if (fact?.source) return fact.source;
+  const page = research.site.existingPages.find((candidate) => candidate.url === url);
+  if (page?.title) return page.title;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+export function withSourcesSection(markdown: string, research: ResearchBrief): string {
+  if (/^##\s+Sources\s*$/im.test(markdown)) return markdown;
+  const urls = [...new Set(markdownUrls(markdown))];
+  if (urls.length === 0) return markdown;
+  const items = urls.map((url) => `- [${sourceLabel(url, research)}](${url})`);
+  return `${markdown.trim()}\n\n## Sources\n\n${items.join("\n")}\n`;
+}
+
 export async function reviewStep(
   options: ReviewStepOptions,
 ): Promise<{ markdown: string; report: ReviewReport; usage: TokenUsage }> {
@@ -155,6 +209,7 @@ export async function reviewStep(
   const response = await completeJson({
     apiKey: options.apiKey,
     model: options.model,
+    fallbackModel: options.fallbackModel,
     baseUrl: options.baseUrl,
     signal: options.signal,
     temperature: 0,
@@ -178,9 +233,39 @@ export async function reviewStep(
   let markdown = applied.markdown;
   for (const url of deadLinks) markdown = unlinkUrl(markdown, url);
 
+  // Finalization must never take down a completed, reviewed draft: everything below only ever
+  // remediates (mechanical correction, then an honest bibliography of what actually got linked), and
+  // if anything here fails unexpectedly the run still returns the bounded review markdown already in
+  // hand rather than losing a finished article.
+  let finalMarkdown = markdown;
+  let usage = response.usage;
+  let lint: ReviewReport["lint"] = { rounds: 0, passed: true, remaining: [] };
+  try {
+    const lintOutcome = await lintAndRepairArticle(markdown, {
+      apiKey: options.apiKey,
+      model: options.model,
+      fallbackModel: options.fallbackModel,
+      baseUrl: options.baseUrl,
+      signal: options.signal,
+      onProgress: (message, round, total) => options.onProgress?.(`${message} (${round}/${total})`),
+    });
+    usage = {
+      promptTokens: usage.promptTokens + lintOutcome.usage.promptTokens,
+      completionTokens: usage.completionTokens + lintOutcome.usage.completionTokens,
+      totalTokens: usage.totalTokens + lintOutcome.usage.totalTokens,
+    };
+    lint = { rounds: lintOutcome.rounds, passed: lintOutcome.passed, remaining: lintOutcome.remaining };
+    finalMarkdown = withSourcesSection(lintOutcome.markdown, options.research);
+  } catch (error) {
+    console.error(
+      "SEO agent finalization failed; returning the bounded review draft instead of failing the run:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+
   return {
-    markdown: `${markdown.trim()}\n`,
-    report: { ...applied.report, deadLinks },
-    usage: response.usage,
+    markdown: `${finalMarkdown.trim()}\n`,
+    report: { ...applied.report, deadLinks, lint },
+    usage,
   };
 }

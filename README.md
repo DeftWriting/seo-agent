@@ -42,7 +42,7 @@ Open [http://localhost:4173](http://localhost:4173). The local Node process runs
 
 ```mermaid
 flowchart TD
-  A[Research site and search results] --> B[Plan 4-7 sections]
+  A[Research site and search results] --> B[Plan 4-7 sections, each 4-6 paragraph blocks]
   B --> C1[Draft section 1 with Deft]
   B --> C2[Draft section 2 with Deft]
   B --> C3[Draft remaining sections with Deft]
@@ -50,10 +50,26 @@ flowchart TD
   C2 --> D
   C3 --> D
   D --> E[Bounded line edit and fact review]
-  E --> F[Markdown article]
+  E --> G[Deterministic lint, minimal repair, Sources list]
+  G --> F[Markdown article]
 ```
 
-The planner chooses four to seven sections, usually targeting roughly 500 words each. Draft requests are independent, self-contained full-document prompts because the public Deft API performs its own outline preprocessing.
+The planner chooses four to seven sections, usually targeting roughly 500 words each. Each section is
+planned as 4 to 6 structured paragraph blocks (a one-sentence job plus 2-3 concrete details), rendered
+into the writer-facing outline text after the planner returns them, rather than asked from the model as
+pre-formatted text — a model reliably returns structured JSON but not exact multi-line bullet
+formatting, and the chained writer generates roughly one paragraph per block, so an under-specified
+outline reliably produced stub sections. Draft requests are independent, self-contained full-document
+prompts because the public Deft API performs its own outline preprocessing; a section that comes back
+far short of its target length is redrafted once, and the longest attempt is kept.
+
+Structural editing and review are both bounded so an aggressive editor can cut a lot without ever
+emptying a planned section or a paragraph outright. After review, a small deterministic linter checks
+the Markdown for defects a model should not need to be trusted to catch (a restated heading, a bare
+URL, a repeated sentence, leaked outline scaffolding, a paragraph that stops mid-sentence) and asks for
+a minimal, vocabulary-only correction when it finds one. Every URL still linked in the finished body is
+then listed in an appended Sources section. None of this can fail the run: if anything past review
+errors out unexpectedly, the run still returns the reviewed article rather than losing a finished draft.
 
 ## CLI options
 
@@ -73,7 +89,13 @@ seo-agent serve [--port <n>]
 Optional environment variables:
 
 - `DEFT_API_BASE_URL` — override `https://deftwriting.com` for local or beta testing
-- `SEO_AGENT_OPENROUTER_MODEL` — override the default OpenRouter model
+- `SEO_AGENT_OPENROUTER_MODEL` — override the default primary OpenRouter model for every step
+- `SEO_AGENT_OPENROUTER_FALLBACK_MODEL` — override the default fallback model every step retries with
+  after a primary-model failure that looks like the model itself (not a transient blip) — a schema
+  rejection, an unavailable route, or a timeout. Deliberately a different provider family by default,
+  since the one such failure this pipeline has hit in practice was one provider refusing a strict JSON
+  schema, which a same-provider fallback would have failed identically. A fallback only runs after the
+  primary attempt fails, so it costs nothing on the normal path.
 - `SEO_AGENT_PORT` — default local UI port
 - `SEO_AGENT_MAX_CONCURRENT_RUNS` — simultaneous local UI runs (default: `1`)
 

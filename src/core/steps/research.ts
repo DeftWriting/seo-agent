@@ -11,6 +11,7 @@ export interface ResearchStepOptions {
   topic: string;
   apiKey: string;
   model: string;
+  fallbackModel?: string | undefined;
   maxPages: number;
   baseUrl?: string;
   signal?: AbortSignal;
@@ -106,6 +107,7 @@ export async function researchStep(options: ResearchStepOptions): Promise<Resear
     completeJson({
       apiKey: options.apiKey,
       model: options.model,
+      fallbackModel: options.fallbackModel,
       baseUrl: options.baseUrl,
       signal: options.signal,
       plugins: [{ id: "web", engine: "exa", max_results: 10 }],
@@ -120,6 +122,7 @@ export async function researchStep(options: ResearchStepOptions): Promise<Resear
     completeJson({
       apiKey: options.apiKey,
       model: options.model,
+      fallbackModel: options.fallbackModel,
       baseUrl: options.baseUrl,
       signal: options.signal,
       plugins: [{ id: "web", engine: "exa", max_results: 10 }],
@@ -137,6 +140,7 @@ export async function researchStep(options: ResearchStepOptions): Promise<Resear
   const synthesis = await completeJson({
     apiKey: options.apiKey,
     model: options.model,
+    fallbackModel: options.fallbackModel,
     baseUrl: options.baseUrl,
     signal: options.signal,
     temperature: 0,

@@ -63,6 +63,11 @@ export async function runSeoAgent(
   const openRouterApiKey = requiredKey(options.openRouterApiKey, "OPENROUTER_API_KEY");
   const deftApiKey = requiredKey(options.deftApiKey, "DEFT_API_KEY");
   const sharedOpenRouterModel = process.env.SEO_AGENT_OPENROUTER_MODEL?.trim() || undefined;
+  // Fallbacks deliberately cross provider families: the one schema rejection this kind of pipeline has
+  // hit in practice was one provider refusing a strict JSON schema, which a same-provider fallback would
+  // fail identically. A fallback only ever runs when the primary attempt fails (see adapters/llm.ts),
+  // so it costs nothing on the normal path.
+  const sharedFallbackModel = process.env.SEO_AGENT_OPENROUTER_FALLBACK_MODEL?.trim() || undefined;
   let usage = { ...EMPTY_USAGE };
 
   await emit(event({ type: "run_started", url: websiteUrl, topic }));
@@ -76,6 +81,7 @@ export async function runSeoAgent(
       topic,
       apiKey: openRouterApiKey,
       model: options.researchModel ?? sharedOpenRouterModel ?? "google/gemini-3-flash-preview",
+      fallbackModel: options.researchFallbackModel ?? sharedFallbackModel ?? "openai/gpt-5.4-mini",
       maxPages: Math.max(1, Math.min(options.maxPages ?? 12, 25)),
       ...(options.openRouterBaseUrl ? { baseUrl: options.openRouterBaseUrl } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
@@ -93,6 +99,7 @@ export async function runSeoAgent(
       research: research.brief,
       apiKey: openRouterApiKey,
       model: options.planModel ?? sharedOpenRouterModel ?? "deepseek/deepseek-v4-pro",
+      fallbackModel: options.planFallbackModel ?? sharedFallbackModel ?? "openai/gpt-5.4-mini",
       ...(options.openRouterBaseUrl ? { baseUrl: options.openRouterBaseUrl } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     });
@@ -152,6 +159,7 @@ export async function runSeoAgent(
       sections: drafted.sections,
       apiKey: openRouterApiKey,
       model: options.editModel ?? sharedOpenRouterModel ?? "google/gemini-3-flash-preview",
+      fallbackModel: options.editFallbackModel ?? sharedFallbackModel ?? "openai/gpt-5.4-nano",
       ...(options.openRouterBaseUrl ? { baseUrl: options.openRouterBaseUrl } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     });
@@ -168,6 +176,7 @@ export async function runSeoAgent(
       research: research.brief,
       apiKey: openRouterApiKey,
       model: options.reviewModel ?? sharedOpenRouterModel ?? "openai/gpt-5.4-mini",
+      fallbackModel: options.reviewFallbackModel ?? sharedFallbackModel ?? "openai/gpt-5.4-nano",
       ...(options.openRouterBaseUrl ? { baseUrl: options.openRouterBaseUrl } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
       onProgress: (message) => emit(event({ type: "step_progress", step: "review", message })),
@@ -175,6 +184,15 @@ export async function runSeoAgent(
     usage = addUsage(usage, reviewed.usage);
     for (const rejected of reviewed.report.rejectedChanges) {
       await emit(event({ type: "warning", step: activeStep, message: `Dropped unsafe edit: ${rejected.reason}` }));
+    }
+    if (!reviewed.report.lint.passed) {
+      await emit(
+        event({
+          type: "warning",
+          step: activeStep,
+          message: `Shipped with ${reviewed.report.lint.remaining.length} unresolved lint finding${reviewed.report.lint.remaining.length === 1 ? "" : "s"} after ${reviewed.report.lint.rounds} repair round${reviewed.report.lint.rounds === 1 ? "" : "s"}.`,
+        }),
+      );
     }
     await emit(event({ type: "step_complete", step: activeStep, message: "Article ready" }));
 

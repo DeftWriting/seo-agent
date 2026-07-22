@@ -14,6 +14,7 @@ export interface StructuralStepOptions {
   sections: DraftedSection[];
   apiKey: string;
   model: string;
+  fallbackModel?: string | undefined;
   baseUrl?: string;
   signal?: AbortSignal;
 }
@@ -22,6 +23,26 @@ interface IndexedParagraph {
   id: string;
   sectionId: string;
   text: string;
+}
+
+const NON_PROSE_BLOCK = /^(?:[-*+]|\d+\.|#{1,6}|>|```|\|)/;
+const SENTENCE_END = /[.!?][)"'”’\]]*(?:\s|$)/g;
+
+// Cutting is the structural editor's only power, and an adversarial editor will sometimes cut too much.
+// Cap it at just over a third of the draft's paragraphs; the least aggressive cuts are restored until
+// the article is back within budget (see applyStructuralOperations).
+const MAX_CUT_RATIO = 0.35;
+
+// A drafted section can end mid-sentence at its own generation boundary. The fragment is not a
+// sentence, so the editor's sentence-cut power cannot reach it; strip it here, before the model ever
+// sees the paragraph, so editing only ever reasons about complete prose.
+export function withoutTrailingFragment(text: string): string {
+  const trimmed = text.trimEnd();
+  if (NON_PROSE_BLOCK.test(trimmed) || /[.!?)"'”’\]]$/.test(trimmed)) return trimmed;
+  const complete = [...trimmed.matchAll(SENTENCE_END)].at(-1);
+  // With no complete sentence to fall back on, keep the paragraph rather than delete it outright.
+  if (!complete) return trimmed;
+  return trimmed.slice(0, (complete.index ?? 0) + complete[0].length).trimEnd();
 }
 
 function stringList(value: unknown): string[] {
@@ -49,7 +70,7 @@ function indexParagraphs(sections: DraftedSection[]): IndexedParagraph[] {
     section.text
       .trim()
       .split(/\n\s*\n/)
-      .map((text) => text.trim())
+      .map((text) => withoutTrailingFragment(text.trim()))
       .filter(Boolean)
       .map((text) => ({ id: `P${next++}`, sectionId: section.id, text })),
   );
@@ -90,16 +111,33 @@ export function applyStructuralOperations(
   });
   for (const paragraph of paragraphs) if (!order.includes(paragraph.id)) order.push(paragraph.id);
 
-  let cuts = new Set(
+  const cuts = new Set(
     [...new Set(operations.cuts)].filter((id) => {
       if (paragraphById.has(id)) return true;
       rejectedOperations.push(`Unknown paragraph ID in cuts: ${id}`);
       return false;
     }),
   );
-  if (paragraphs.length && cuts.size / paragraphs.length > 0.4) {
-    rejectedOperations.push("Paragraph cuts rejected because they exceeded 40% of the draft.");
-    cuts = new Set();
+  // The editor is adversarial by design, so it will sometimes cut too much: gut most of the draft, or
+  // empty a whole section. Cutting is its only power, so the guard is a deterministic cut budget with
+  // graduated restoration — the least aggressive cuts (in draft order) are restored, rather than
+  // rejecting every cut outright the moment the budget is crossed.
+  const maxCuts = Math.floor(paragraphs.length * MAX_CUT_RATIO);
+  let restoredCount = 0;
+  for (const paragraph of paragraphs) {
+    if (cuts.size <= maxCuts) break;
+    if (cuts.delete(paragraph.id)) restoredCount += 1;
+  }
+  // A cut budget alone does not stop every planned section from being emptied by a few well-placed
+  // cuts. Every planned section must keep at least one paragraph, so restore the first cut paragraph
+  // in any section left with none.
+  for (const sectionId of new Set(paragraphs.map((paragraph) => paragraph.sectionId))) {
+    if (paragraphs.some((paragraph) => paragraph.sectionId === sectionId && !cuts.has(paragraph.id))) continue;
+    const first = paragraphs.find((paragraph) => paragraph.sectionId === sectionId && cuts.has(paragraph.id));
+    if (first && cuts.delete(first.id)) restoredCount += 1;
+  }
+  if (restoredCount > 0) {
+    rejectedOperations.push(`Restored ${restoredCount} cut paragraph${restoredCount === 1 ? "" : "s"} to keep every section and stay within the cut budget.`);
   }
 
   const mutable = new Map(paragraphs.map((paragraph) => [paragraph.id, paragraph.text]));
@@ -116,7 +154,14 @@ export function applyStructuralOperations(
       rejectedOperations.push(`Sentence cut was not a complete sentence: ${sentence.slice(0, 80)}`);
       continue;
     }
-    mutable.set(id, text.replace(sentence, "").replace(/ {2,}/g, " ").trim());
+    const remainder = text.replace(sentence, "").replace(/ {2,}/g, " ").trim();
+    // A sentence cut that would empty the paragraph is a paragraph cut in disguise, and paragraph cuts
+    // are already bounded above; skip it rather than silently deleting a whole paragraph here.
+    if (!remainder) {
+      rejectedOperations.push(`Sentence cut would have emptied its paragraph: ${sentence.slice(0, 80)}`);
+      continue;
+    }
+    mutable.set(id, remainder);
   }
 
   const rank = new Map(order.map((id, index) => [id, index]));
@@ -155,6 +200,7 @@ export async function structuralStep(
   const response = await completeJson({
     apiKey: options.apiKey,
     model: options.model,
+    fallbackModel: options.fallbackModel,
     baseUrl: options.baseUrl,
     signal: options.signal,
     temperature: 0,

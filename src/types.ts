@@ -47,10 +47,21 @@ export interface ResearchBrief {
   facts: SourceFact[];
 }
 
+export interface OutlineParagraph {
+  job: string;
+  details: string[];
+}
+
 export interface PlannedSection {
   id: string;
   heading: string;
   summary: string;
+  // The source of truth the planner returns. `outline` below is rendered from this array rather than
+  // asked for as free-form text: a model reliably returns a JSON array of {job, details} objects, but
+  // unreliably reproduces exact multi-line "- Paragraph N: ...\n - detail" formatting inside a JSON
+  // string field, and the chained writer generates roughly one paragraph per block, so a collapsed
+  // block count silently produces a stub section. See core/steps/plan.ts.
+  paragraphs: OutlineParagraph[];
   outline: string;
   facts: SourceFact[];
 }
@@ -101,6 +112,21 @@ export interface ReviewProposal {
   issues: ReviewIssue[];
 }
 
+export type ArticleLintRule =
+  | "heading_restated_in_body"
+  | "title_restated_in_body"
+  | "duplicate_heading"
+  | "bare_url_in_prose"
+  | "repeated_sentence"
+  | "outline_artifact"
+  | "unterminated_paragraph";
+
+export interface ArticleLintFinding {
+  rule: ArticleLintRule;
+  quote: string;
+  detail: string;
+}
+
 export interface ReviewReport {
   proposal: ReviewProposal;
   appliedEdits: ReviewEdit[];
@@ -108,6 +134,7 @@ export interface ReviewReport {
   rejectedChanges: Array<{ change: string; reason: string }>;
   deadLinks: string[];
   issues: ReviewIssue[];
+  lint: { rounds: number; passed: boolean; remaining: ArticleLintFinding[] };
 }
 
 export interface SeoAgentResult {
@@ -132,9 +159,13 @@ export interface SeoAgentRunOptions {
   openRouterBaseUrl?: string | undefined;
   deftApiUrl?: string | undefined;
   researchModel?: string | undefined;
+  researchFallbackModel?: string | undefined;
   planModel?: string | undefined;
+  planFallbackModel?: string | undefined;
   editModel?: string | undefined;
+  editFallbackModel?: string | undefined;
   reviewModel?: string | undefined;
+  reviewFallbackModel?: string | undefined;
   maxPages?: number | undefined;
   sectionConcurrency?: number | undefined;
   thinkingLevel?: "faster" | "smarter" | undefined;
