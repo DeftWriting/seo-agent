@@ -11,26 +11,41 @@ export interface GenerateWithDeftOptions {
 }
 
 export interface DeftGenerationResult {
-  id: string;
   text: string;
   usage: TokenUsage;
   amountCents?: number | undefined;
 }
 
+// The public POST /v1/generate response is exactly { text, usage: { input_tokens, output_tokens,
+// thinking_tokens } } — see https://deftwriting.com/developers. It carries no `id` and no billed
+// `amount_cents`; depending on either is what made this adapter throw "invalid generation response" on
+// every real response and report Deft cost as $0.00. Only fields documented on that page may appear here.
 interface DeftResponse {
-  id?: unknown;
   text?: unknown;
   usage?: {
     input_tokens?: unknown;
     output_tokens?: unknown;
     thinking_tokens?: unknown;
-    amount_cents?: unknown;
   };
   error?: { code?: unknown; message?: unknown };
 }
 
 function numberOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+// Deft's published per-token pricing, in cents (https://deftwriting.com/developers): $2.50 per 1M input
+// tokens plus $12 per 1M output-and-thinking tokens, rounded up to the nearest cent. Computed here from
+// the public token counts because the public response does not expose a billed amount.
+const DEFT_INPUT_CENTS_PER_MILLION = 250;
+const DEFT_OUTPUT_CENTS_PER_MILLION = 1200;
+
+function deftCostCents(inputTokens: number, outputTokens: number, thinkingTokens: number): number {
+  const raw =
+    (inputTokens * DEFT_INPUT_CENTS_PER_MILLION +
+      (outputTokens + thinkingTokens) * DEFT_OUTPUT_CENTS_PER_MILLION) /
+    1_000_000;
+  return Math.ceil(raw);
 }
 
 export async function generateWithDeft(
@@ -62,18 +77,18 @@ export async function generateWithDeft(
         : response.statusText;
     throw new Error(`Deft generation failed (${response.status}): ${message}`);
   }
-  if (typeof body?.id !== "string" || typeof body.text !== "string" || !body.text.trim()) {
+  if (typeof body?.text !== "string" || !body.text.trim()) {
     throw new Error("Deft returned an invalid generation response.");
   }
 
   const input = numberOrZero(body.usage?.input_tokens);
   const output = numberOrZero(body.usage?.output_tokens);
   const thinking = numberOrZero(body.usage?.thinking_tokens);
-  const amountCents = numberOrZero(body.usage?.amount_cents) || undefined;
-  // Deft's own billed amount is the CLI's other cost source alongside OpenRouter (see cost-meter.ts).
-  if (amountCents !== undefined) recordDeftCost(amountCents);
+  // The public response exposes token counts but not a billed amount, so derive Deft's cost from its
+  // published per-token pricing. This is the CLI's other cost source alongside OpenRouter (cost-meter.ts).
+  const amountCents = deftCostCents(input, output, thinking);
+  if (amountCents > 0) recordDeftCost(amountCents);
   return {
-    id: body.id,
     text: body.text.trim(),
     usage: {
       promptTokens: input,

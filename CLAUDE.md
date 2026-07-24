@@ -10,6 +10,38 @@ This is the open-source Deft SEO Agent: a TypeScript Node.js CLI and tiny local 
 - Run `npm test`, `npm run typecheck`, and `npm run build` before publishing.
 - This repository is local software. Do not add deployment configuration unless the user explicitly asks.
 
+## Public API boundary (hard rule)
+
+This CLI is an **open-source demonstration of what the hosted web app's SEO agent does, rebuilt on nothing
+but Deft's public API.** Its whole value is that anyone can run it with a self-serve key, so it must depend
+only on the public contract — never on anything the hosted app can reach because it runs *inside* Deft.
+
+- **Only call the public `POST /v1/generate` endpoint, and depend only on fields documented at
+  https://deftwriting.com/developers.** As of this writing the public contract is:
+  - Request: `prompt` (required), plus optional `generationMode`, `rewriteInstructions`, `thinkingLevel`
+    (`faster`|`smarter`), `detailMode` (`strict`|`creative`), `style`, `styleKind`.
+  - Success response: **exactly** `{ text, usage: { input_tokens, output_tokens, thinking_tokens } }` —
+    and nothing else. There is no `id`, no `amount_cents`, and no `outline` in a public response.
+- **Never read or require a response field the public docs do not list.** This is not a style preference —
+  it broke the tool. `adapters/deft.ts` required a response `id` and read `usage.amount_cents`; neither is
+  public, so *every* generation threw "Deft returned an invalid generation response" and every run reported
+  Deft cost as `$0.00`. Derive Deft's billed cost from the public token counts and the published pricing
+  ($2.50 per 1M input tokens + $12 per 1M output-and-thinking tokens, rounded up to the cent), never from a
+  private billed field.
+- **Never touch the hosted app's internal or undocumented surface.** No `preprocessed` object or
+  `X-Deft-Preprocessed-Input-Token` header, no `returnOutline`, no direct Pangram reward endpoint, no
+  internal model names/checkpoints, no DFT wire format. Those live in `web/`'s repo-local
+  `api_documentation.txt` under "Internal-only"/"Undocumented compatibility" headings (which explicitly say
+  not to expose them) and in the hosted pipeline; they are off-limits here.
+- **Emulate the hosted app through the public contract only.** When porting a lesson or mechanism from
+  `web/src/lib/seo-agent/`, keep only the part expressible over the public API and drop anything that
+  assumes private access. Where the hosted app reaches internal machinery — it calls the chained writer
+  directly and toggles the per-chunk hallucination judge and Pangram-reward sampling itself — this CLI can
+  only ask for `thinkingLevel: faster|smarter`. Reproduce the *intent*, never the internals.
+- **Before changing `adapters/deft.ts`, re-check the request and response field lists against the live
+  /developers page.** The public shape is the source of truth; if it changed, update the list above in the
+  same pass.
+
 ## Cost and reliability (inverts the hosted product's rule)
 
 The hosted product's own `web/src/lib/seo-agent/CLAUDE.md` is explicit that operating cost must never

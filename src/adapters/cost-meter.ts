@@ -83,8 +83,9 @@ export function recordLlmFallback(): void {
   if (context) context.meter.fallbacks += 1;
 }
 
-// Deft's public API returns its own billed amount_cents per generation; this is the CLI's other cost
-// source alongside OpenRouter, and the only one that is not an LLM "call" in the sense above.
+// Deft cost is the CLI's other cost source alongside OpenRouter, and the only one that is not an LLM
+// "call" in the sense above. The public API exposes only token counts, so the amount is computed from
+// Deft's published per-token pricing in adapters/deft.ts, not read from a billed field.
 export function recordDeftCost(amountCents: number): void {
   const context = storage.getStore();
   if (!context) return;

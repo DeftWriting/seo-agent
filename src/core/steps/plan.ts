@@ -105,24 +105,53 @@ export function parsePlan(value: unknown, approvedFacts: SourceFact[]): ArticleP
   return plan;
 }
 
+const MAX_PLAN_ATTEMPTS = 3;
+
 export async function planStep(
   options: PlanStepOptions,
 ): Promise<{ plan: ArticlePlan; usage: TokenUsage }> {
-  const response = await completeJson({
-    apiKey: options.apiKey,
-    model: options.model,
-    fallbackModel: options.fallbackModel,
-    baseUrl: options.baseUrl,
-    signal: options.signal,
-    temperature: 0.2,
-    costLabel: "plan",
-    messages: [
-      { role: "system", content: PLAN_SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `Site: ${options.url}\nTarget topic: ${options.topic}\n\nResearch brief:\n${JSON.stringify(options.research, null, 2)}`,
-      },
-    ],
-  });
-  return { plan: parsePlan(response.value, options.research.facts), usage: response.usage };
+  const baseInstruction = `Site: ${options.url}\nTarget topic: ${options.topic}\n\nResearch brief:\n${JSON.stringify(options.research, null, 2)}`;
+  let usage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let lastError: unknown;
+
+  // The planner is a structured-output step, so a response can be valid JSON yet still break a structural
+  // rule (wrong section count, too few paragraphs per section, an unapproved fact). `completeJson` already
+  // retries model-plus-fallback for transport-level failures; this loop additionally re-asks when the
+  // *content* fails `parsePlan`, feeding the exact rejection back so the model can correct it, up to
+  // MAX_PLAN_ATTEMPTS. Every attempt's tokens are counted because each one is billed. This mirrors the
+  // hosted planner's resilience to an occasional malformed plan rather than failing the whole run — and a
+  // failed run has already spent the CLI user's own money — on the first bad output.
+  for (let attempt = 1; attempt <= MAX_PLAN_ATTEMPTS; attempt += 1) {
+    const content =
+      lastError instanceof Error
+        ? `${baseInstruction}\n\nYour previous response was rejected: ${lastError.message} Return corrected JSON that satisfies every requirement.`
+        : baseInstruction;
+    const response = await completeJson({
+      apiKey: options.apiKey,
+      model: options.model,
+      fallbackModel: options.fallbackModel,
+      baseUrl: options.baseUrl,
+      signal: options.signal,
+      temperature: 0.2,
+      costLabel: "plan",
+      messages: [
+        { role: "system", content: PLAN_SYSTEM_PROMPT },
+        { role: "user", content },
+      ],
+    });
+    usage = {
+      promptTokens: usage.promptTokens + response.usage.promptTokens,
+      completionTokens: usage.completionTokens + response.usage.completionTokens,
+      totalTokens: usage.totalTokens + response.usage.totalTokens,
+    };
+    try {
+      return { plan: parsePlan(response.value, options.research.facts), usage };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("The planner did not return a valid plan.");
 }
